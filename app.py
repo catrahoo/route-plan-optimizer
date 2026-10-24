@@ -107,7 +107,7 @@ PALETTE = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#00a5a5",
 with tab_map:
     slots = list(opt.build_slots(quota)["SLOT"])
     pilih = st.selectbox("Tampilkan hari", ["Semua"] + slots)
-    m = folium.Map(location=opt.DEPOT, zoom_start=12, tiles="cartodbpositron")
+    m = folium.Map(location=opt.DEPOT, zoom_start=12, tiles="OpenStreetMap")
     folium.Marker(opt.DEPOT, tooltip="TITIK AWAL", icon=folium.Icon(color="red", icon="home")).add_to(m)
     for i, s in enumerate(slots):
         if pilih not in ("Semua", s):
