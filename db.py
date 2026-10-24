@@ -71,3 +71,10 @@ def fetch_outlets(codes: tuple) -> pd.DataFrame:
             st.stop()
     df = pd.DataFrame(rows, columns=COLS)
     return df.rename(columns=str.upper)
+
+
+def update_coords(customerno: str, lat: float, lon: float):
+    """Simpan koordinat hasil edit manual ke database."""
+    get_client().table("outlet_master").update(
+        {"latitude": float(lat), "longitude": float(lon)}).eq("customerno", customerno).execute()
+    fetch_outlets.clear()

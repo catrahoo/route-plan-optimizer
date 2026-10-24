@@ -71,35 +71,51 @@ if st.button("🚀 Susun Jadwal", type="primary"):
     with st.spinner("Mengambil data outlet..."):
         outlets = db.fetch_outlets(tuple(codes))
     missing = sorted(set(codes) - set(outlets["CUSTOMERNO"]))
-    if outlets.empty:
-        st.error("Tidak ada kode yang ditemukan di database.")
-        st.stop()
-    bar = st.progress(0.0, text="Menyusun jadwal & rute...")
-    plan = opt.build_plan(outlets, quota, mode, factor, return_to_depot, time_limit,
-                          progress=lambda p: bar.progress(p, text=f"Menyusun rute... {int(p * 100)}%"))
-    bar.empty()
+    for c in ["LATITUDE", "LONGITUDE"]:
+        outlets[c] = pd.to_numeric(outlets[c], errors="coerce")
+    ok_mask = opt.valid_coord(outlets["LATITUDE"], outlets["LONGITUDE"]).to_numpy()
+    good, nocoord = outlets[ok_mask], outlets[~ok_mask]
+    if good.empty:
+        plan = opt.empty_plan(outlets.columns)
+    else:
+        bar = st.progress(0.0, text="Menyusun jadwal & rute...")
+        plan = opt.build_plan(good, quota, mode, factor, return_to_depot, time_limit,
+                              progress=lambda p: bar.progress(p, text=f"Menyusun rute... {int(p * 100)}%"))
+        bar.empty()
     st.session_state.plan = plan
     st.session_state.meta = {"n_input": len(codes), "dup": dup, "missing": missing}
+    nc = nocoord.copy()
+    nc.insert(3, "KOORDINAT_GMAPS", "")
+    st.session_state.nc_base = nc.reset_index(drop=True)
+    st.session_state.nc_ver = st.session_state.get("nc_ver", 0) + 1
+    st.session_state.pop("last_click", None)
 
 if "plan" not in st.session_state:
     st.stop()
 
 plan, meta = st.session_state.plan, st.session_state.meta
+nc_base = st.session_state.get("nc_base", pd.DataFrame(columns=["CUSTOMERNO", "NAMA_OUTLET", "ALAMAT", "KOORDINAT_GMAPS", "LATITUDE", "LONGITUDE"]))
+st.session_state.setdefault("nc_ver", 0)
 cap = opt.capacity(quota)
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Kode di-paste", meta["n_input"])
-c2.metric("Ditemukan", len(plan))
-c3.metric("Tidak ditemukan", len(meta["missing"]))
-c4.metric("Kapasitas 2 minggu", cap)
+c2.metric("Masuk jadwal", int((plan["WEEK"] != opt.UNSCHEDULED).sum()))
+c3.metric("Tanpa koordinat", len(nc_base))
+c4.metric("Tidak ada di database", len(meta["missing"]))
+c5.metric("Kapasitas 2 minggu", cap)
 if meta["dup"]:
     st.info(f"{len(meta['dup'])} kode dobel diabaikan: {', '.join(meta['dup'][:20])}")
-if meta["missing"]:
-    st.warning("Kode tidak ada di database (atau koordinatnya kosong): " + ", ".join(meta["missing"][:50]))
+n_masalah = len(nc_base) + len(meta["missing"])
+if n_masalah:
+    st.warning(f"Ada {n_masalah} outlet yang belum bisa dijadwalkan. Buka tab **⚠️ Data Belum Lengkap** untuk melengkapinya.")
 if len(plan) > cap:
     st.warning(f"Jumlah outlet ({len(plan)}) melebihi kapasitas ({cap}). "
                f"Supaya semua masuk, kuota minimal **{-(-len(plan) // 11)}/hari**.")
+if st.session_state.pop("fix_msg", None):
+    st.success("✅ Koordinat tersimpan ke database dan outlet sudah dimasukkan ke jadwal (hari terdekat).")
 
-tab_map, tab_edit, tab_sum, tab_exp = st.tabs(["🗺️ Peta", "✏️ Revisi", "📊 Ringkasan", "📥 Download Excel"])
+tab_map, tab_edit, tab_sum, tab_fix, tab_exp = st.tabs(
+    ["🗺️ Peta", "✏️ Revisi", "📊 Ringkasan", f"⚠️ Data Belum Lengkap ({n_masalah})", "📥 Download Excel"])
 
 PALETTE = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#00a5a5",
            "#f032e6", "#7a9c00", "#008080", "#9a6324", "#800000", "#000075"]
@@ -182,6 +198,94 @@ with tab_sum:
         st.warning("Hari yang melebihi kuota: " +
                    ", ".join(f"{r.WEEK}-{r.HARI} (+{r.SELISIH})" for r in over.itertuples()))
     st.metric("Total jarak 2 minggu (perkiraan)", f"{ring['TOTAL_KM'].sum():,.1f} km")
+
+with tab_fix:
+    st.subheader(f"📍 Outlet tanpa koordinat / koordinat di luar area ({len(nc_base)})")
+    if nc_base.empty:
+        st.success("Semua outlet sudah punya koordinat.")
+    else:
+        st.markdown(
+            "Isi koordinat dengan salah satu cara:\n"
+            "1. **Paste dari Google Maps** ke kolom *Koordinat GMaps* (contoh: `-7.2592, 112.6936`), atau\n"
+            "2. Ketik langsung di kolom **Latitude** dan **Longitude**, atau\n"
+            "3. **Pilih outlet** di bawah tabel, lalu **klik lokasinya di peta**.\n\n"
+            "Setelah itu klik **💾 Simpan koordinat**. Koordinat tersimpan ke database "
+            "dan outlet otomatis masuk ke jadwal.")
+        edited_nc = st.data_editor(
+            nc_base[["CUSTOMERNO", "NAMA_OUTLET", "ALAMAT", "KOORDINAT_GMAPS", "LATITUDE", "LONGITUDE"]],
+            column_config={
+                "KOORDINAT_GMAPS": st.column_config.TextColumn("Koordinat GMaps (paste di sini)"),
+                "LATITUDE": st.column_config.NumberColumn("Latitude", format="%.7f"),
+                "LONGITUDE": st.column_config.NumberColumn("Longitude", format="%.7f"),
+            },
+            disabled=["CUSTOMERNO", "NAMA_OUTLET", "ALAMAT"],
+            hide_index=True, use_container_width=True, key=f"nc_{st.session_state.nc_ver}")
+        cur = nc_base.copy()
+        for c in ["KOORDINAT_GMAPS", "LATITUDE", "LONGITUDE"]:
+            cur[c] = edited_nc[c].values
+        for i, r in cur.iterrows():
+            if str(r.KOORDINAT_GMAPS or "").strip():
+                la, lo = opt.parse_gmaps(r.KOORDINAT_GMAPS)
+                if la is not None:
+                    cur.at[i, "LATITUDE"], cur.at[i, "LONGITUDE"] = la, lo
+        cur["LATITUDE"] = pd.to_numeric(cur["LATITUDE"], errors="coerce")
+        cur["LONGITUDE"] = pd.to_numeric(cur["LONGITUDE"], errors="coerce")
+        cur["_OK"] = opt.valid_coord(cur["LATITUDE"], cur["LONGITUDE"]).to_numpy()
+
+        label = (cur["CUSTOMERNO"] + " — " + cur["NAMA_OUTLET"].fillna("")
+                 + cur["_OK"].map({True: "  ✅", False: ""})).tolist()
+        idx = st.selectbox("Pilih outlet yang mau ditandai di peta", range(len(cur)),
+                           format_func=lambda i: label[i])
+        sel = cur.iloc[idx]
+        center = [sel.LATITUDE, sel.LONGITUDE] if sel["_OK"] else list(opt.DEPOT)
+        m2 = folium.Map(location=center, zoom_start=16 if sel["_OK"] else 12, tiles="OpenStreetMap")
+        folium.Marker(opt.DEPOT, tooltip="TITIK AWAL", icon=folium.Icon(color="red", icon="home")).add_to(m2)
+        for r in plan[plan["WEEK"] != opt.UNSCHEDULED].itertuples():
+            folium.CircleMarker([r.LATITUDE, r.LONGITUDE], radius=3, color="#999999", fill=True,
+                                tooltip=f"{r.CUSTOMERNO} {r.NAMA_OUTLET or ''}").add_to(m2)
+        for i, r in cur[cur["_OK"]].iterrows():
+            if i != idx:
+                folium.CircleMarker([r.LATITUDE, r.LONGITUDE], radius=6, color="#4363d8", fill=True,
+                                    tooltip=f"{r.CUSTOMERNO} {r.NAMA_OUTLET or ''}").add_to(m2)
+        if sel["_OK"]:
+            folium.Marker([sel.LATITUDE, sel.LONGITUDE], tooltip=f"{sel.CUSTOMERNO} {sel.NAMA_OUTLET or ''}",
+                          icon=folium.Icon(color="green", icon="star")).add_to(m2)
+        st.caption(f"👆 Klik di peta untuk menaruh lokasi **{sel.CUSTOMERNO} — {sel.NAMA_OUTLET or ''}**. "
+                   "Titik abu-abu = outlet yang sudah terjadwal.")
+        out = st_folium(m2, height=500, use_container_width=True,
+                        returned_objects=["last_clicked"], key="map_fix")
+        click = (out or {}).get("last_clicked")
+        if click and click != st.session_state.get("last_click"):
+            st.session_state.last_click = click
+            base = cur.drop(columns="_OK")
+            base.at[idx, "LATITUDE"] = round(click["lat"], 7)
+            base.at[idx, "LONGITUDE"] = round(click["lng"], 7)
+            base.at[idx, "KOORDINAT_GMAPS"] = ""
+            st.session_state.nc_base = base
+            st.session_state.nc_ver += 1
+            st.rerun()
+
+        siap = cur[cur["_OK"]]
+        salah = cur[cur["LATITUDE"].notna() & ~cur["_OK"]]
+        if len(salah):
+            st.warning("Koordinat ini di luar Surabaya Raya, cek lagi: " + ", ".join(salah["CUSTOMERNO"]))
+        if st.button(f"💾 Simpan koordinat ({len(siap)} outlet)", type="primary", disabled=siap.empty):
+            with st.spinner("Menyimpan ke database..."):
+                for r in siap.itertuples():
+                    db.update_coords(r.CUSTOMERNO, r.LATITUDE, r.LONGITUDE)
+                new = siap.drop(columns=["_OK", "KOORDINAT_GMAPS"])
+                st.session_state.plan = opt.add_outlets(plan, new, quota, factor, return_to_depot, time_limit)
+                st.session_state.nc_base = cur[~cur["_OK"]].drop(columns="_OK").reset_index(drop=True)
+                st.session_state.nc_ver += 1
+                st.session_state.fix_msg = True
+            st.rerun()
+
+    st.subheader(f"❓ Kode tidak ada di database ({len(meta['missing'])})")
+    if meta["missing"]:
+        st.caption("Kode ini tidak ada di master outlet. Cek apakah salah ketik, atau outlet baru yang belum ada di master.")
+        st.dataframe(pd.DataFrame({"CUSTOMERNO": meta["missing"]}), hide_index=True)
+    else:
+        st.success("Semua kode ada di database.")
 
 with tab_exp:
     info = {"Salesman": salesman, "Kuota/hari": quota, "Kuota Sabtu": quota // 2, "Mode": mode,

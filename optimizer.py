@@ -9,6 +9,26 @@ DEPOT = (-7.259280093018434, 112.69361822224205)
 HARI = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"]
 WEEKS = ["Ganjil", "Genap"]
 UNSCHEDULED = "BELUM TERJADWAL"
+# Batas wilayah kerja (Surabaya Raya) untuk cek koordinat wajar
+LAT_MIN, LAT_MAX, LON_MIN, LON_MAX = -7.65, -7.0, 112.4, 113.0
+
+
+def valid_coord(lat, lon) -> pd.Series:
+    lat = pd.to_numeric(pd.Series(lat), errors="coerce")
+    lon = pd.to_numeric(pd.Series(lon), errors="coerce")
+    return (lat.between(LAT_MIN, LAT_MAX) & lon.between(LON_MIN, LON_MAX)).fillna(False)
+
+
+def parse_gmaps(text):
+    """'-7.2592, 112.6936' (copy dari Google Maps) -> (lat, lon) atau (None, None)."""
+    import re
+    angka = re.findall(r"-?\d+(?:[.,]\d+)?", str(text or ""))
+    if len(angka) < 2:
+        return None, None
+    a, b = (float(x.replace(",", ".")) for x in angka[:2])
+    if abs(a) > 90:          # tertukar (long, lat)
+        a, b = b, a
+    return a, b
 
 
 # ---------- Kapasitas ----------
@@ -179,6 +199,47 @@ def build_plan(outlets: pd.DataFrame, quota: int, mode: str, factor: float,
         df.loc[sub.index, "URUTAN"] = optimize_slot(sub, factor, return_to_depot, time_limit_s)
         if progress:
             progress((i + 1) / len(groups))
+    return compute_distances(df, factor)
+
+
+def empty_plan(columns) -> pd.DataFrame:
+    cols = list(columns) + ["WEEK", "HARI", "URUTAN", "JARAK_KM", "KUMULATIF_KM", "SLOT"]
+    return pd.DataFrame(columns=cols)
+
+
+def add_outlets(plan: pd.DataFrame, new: pd.DataFrame, quota: int, factor: float,
+                return_to_depot: bool, time_limit_s: int = 2) -> pd.DataFrame:
+    """Masukkan outlet baru ke hari terdekat yang masih ada sisa kuota, lalu rapikan rutenya."""
+    slots = build_slots(quota)
+    df = plan.copy()
+    sched = df[df["WEEK"] != UNSCHEDULED]
+    count = sched.groupby(["WEEK", "HARI"]).size().to_dict()
+    centers = sched.groupby(["WEEK", "HARI"])[["LATITUDE", "LONGITUDE"]].mean()
+    touched, rows = set(), []
+    for _, r in new.iterrows():
+        best, best_d, best_full = None, None, None
+        for s in slots.itertuples():
+            key = (s.WEEK, s.HARI)
+            if key in centers.index:
+                c = centers.loc[key]
+                d = haversine_matrix([r.LATITUDE, c.LATITUDE], [r.LONGITUDE, c.LONGITUDE])[0, 1]
+            else:
+                d = haversine_matrix([r.LATITUDE, DEPOT[0]], [r.LONGITUDE, DEPOT[1]])[0, 1]
+            if count.get(key, 0) < s.CAP and (best_d is None or d < best_d):
+                best, best_d = key, d
+            if best_full is None or d < best_full[1]:
+                best_full = (key, d)
+        key = best or best_full[0]
+        count[key] = count.get(key, 0) + 1
+        touched.add(key)
+        row = r.to_dict()
+        row.update({"WEEK": key[0], "HARI": key[1], "URUTAN": 9999})
+        rows.append(row)
+    df = pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
+    df["URUTAN"] = pd.to_numeric(df["URUTAN"], errors="coerce").fillna(9999)
+    for w, h in touched:
+        sub = df[(df["WEEK"] == w) & (df["HARI"] == h)]
+        df.loc[sub.index, "URUTAN"] = optimize_slot(sub, factor, return_to_depot, time_limit_s)
     return compute_distances(df, factor)
 
 
