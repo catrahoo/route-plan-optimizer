@@ -88,7 +88,7 @@ st.sidebar.caption("Develop Program By Nurman Catra")
 
 # ---------- Input ----------
 st.title("🗺️ Route Plan Optimizer")
-text = st.text_area("Paste CUSTOMERNO di sini (boleh langsung copy satu kolom dari Excel)", height=180)
+text = st.text_area("Silahkan Copas CODE CUSTOMER disini Ya....", height=180)
 
 if st.button("🚀 Susun Jadwal", type="primary"):
     codes, dup = parse_codes(text)
