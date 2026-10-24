@@ -202,6 +202,60 @@ def build_plan(outlets: pd.DataFrame, quota: int, mode: str, factor: float,
     return compute_distances(df, factor)
 
 
+NO_LONGLAT = "⚠️ (no longlat)"
+
+
+def street_name(alamat) -> str:
+    """'JL. NGAGEL NO 143' -> 'NGAGEL'."""
+    import re
+    a = str(alamat or "").upper()
+    a = re.sub(r"\b(JL|JLN|JALAN)\b\.?", " ", a)
+    a = re.split(r"\b(?:NO|NOMOR|RT|RW|KAV|BLOK|GG|GANG)\b|[0-9,/]", a)[0]
+    return " ".join(re.sub(r"[^A-Z ]", " ", a).split())
+
+
+def house_no(alamat):
+    import re
+    m = re.search(r"\bNO\.?\s*(\d+)", str(alamat or "").upper())
+    return int(m.group(1)) if m else None
+
+
+def estimate_coords(nocoord: pd.DataFrame, ref: pd.DataFrame) -> pd.DataFrame:
+    """Perkiraan lokasi outlet tanpa koordinat.
+    1) nama jalan sama di Sales District yang sama -> dekat toko dengan nomor rumah terdekat
+    2) kalau tidak ada -> titik tengah outlet di Sales District itu
+    Return baris yang berhasil diperkirakan + kolom KETERANGAN."""
+    ref = ref.copy()
+    for c in ["LATITUDE", "LONGITUDE"]:
+        ref[c] = pd.to_numeric(ref[c], errors="coerce")
+    ref = ref[valid_coord(ref["LATITUDE"], ref["LONGITUDE"]).to_numpy()]
+    ref["_ST"] = ref["ALAMAT"].map(street_name)
+    ref["_NO"] = ref["ALAMAT"].map(house_no)
+    out = []
+    for k, (_, r) in enumerate(nocoord.iterrows()):
+        dist = ref[(ref["SALES_DISTRICT"] == r.get("SALES_DISTRICT")) & (ref["CUSTOMERNO"] != r.get("CUSTOMERNO"))]
+        st_ = street_name(r.get("ALAMAT"))
+        same = dist[(dist["_ST"] == st_) & (st_ != "")] if st_ else dist.iloc[0:0]
+        if len(same):
+            no = house_no(r.get("ALAMAT"))
+            pick = same.iloc[0]
+            if no is not None and same["_NO"].notna().any():
+                pick = same.loc[(same["_NO"] - no).abs().idxmin()]
+            lat, lon = pick.LATITUDE, pick.LONGITUDE
+            ket = f"{NO_LONGLAT} dekat {pick.CUSTOMERNO} (alamat sama)"
+        elif len(dist):
+            lat, lon = dist["LATITUDE"].median(), dist["LONGITUDE"].median()
+            ket = f"{NO_LONGLAT} perkiraan Sales District {r.get('SALES_DISTRICT')}"
+        else:
+            continue
+        ang = (k * 2.399963) % (2 * math.pi)            # geser ±15 m supaya titik tidak menumpuk
+        row = r.to_dict()
+        row.update({"LATITUDE": lat + 0.000135 * math.sin(ang),
+                    "LONGITUDE": lon + 0.000135 * math.cos(ang), "KETERANGAN": ket})
+        out.append(row)
+    return pd.DataFrame(out, columns=list(nocoord.columns) + ["KETERANGAN"])
+
+
 def empty_plan(columns) -> pd.DataFrame:
     cols = list(columns) + ["WEEK", "HARI", "URUTAN", "JARAK_KM", "KUMULATIF_KM", "SLOT"]
     return pd.DataFrame(columns=cols)
@@ -284,7 +338,7 @@ def summary(df: pd.DataFrame, quota: int, factor: float, return_to_depot: bool,
 
 
 EXPORT_COLS = ["WEEK", "HARI", "URUTAN", "CUSTOMERNO", "NAMA_OUTLET", "ALAMAT", "SALES_DISTRICT",
-               "LATITUDE", "LONGITUDE", "JARAK_KM", "KUMULATIF_KM"]
+               "LATITUDE", "LONGITUDE", "JARAK_KM", "KUMULATIF_KM", "KETERANGAN"]
 
 
 def to_excel_bytes(plan: pd.DataFrame, ringkasan: pd.DataFrame, info: dict) -> bytes:

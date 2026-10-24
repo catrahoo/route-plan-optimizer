@@ -104,11 +104,21 @@ if st.button("🚀 Susun Jadwal", type="primary"):
         outlets[c] = pd.to_numeric(outlets[c], errors="coerce")
     ok_mask = opt.valid_coord(outlets["LATITUDE"], outlets["LONGITUDE"]).to_numpy()
     good, nocoord = outlets[ok_mask], outlets[~ok_mask]
-    if good.empty:
-        plan = opt.empty_plan(outlets.columns)
+    # Plan A: outlet tanpa koordinat ikut dijadwalkan dengan lokasi perkiraan
+    #   1) nama jalan sama di Sales District yang sama, 2) titik tengah Sales District
+    est = pd.DataFrame(columns=list(outlets.columns) + ["KETERANGAN"])
+    if len(nocoord):
+        dists = tuple(sorted(set(nocoord["SALES_DISTRICT"].dropna())))
+        with st.spinner("Memperkirakan lokasi outlet tanpa koordinat..."):
+            ref = pd.concat([good[["CUSTOMERNO", "ALAMAT", "SALES_DISTRICT", "LATITUDE", "LONGITUDE"]],
+                             db.fetch_district_refs(dists)], ignore_index=True).drop_duplicates("CUSTOMERNO")
+            est = opt.estimate_coords(nocoord, ref)
+    good_a = pd.concat([good.assign(KETERANGAN=""), est], ignore_index=True)
+    if good_a.empty:
+        plan = opt.empty_plan(list(outlets.columns) + ["KETERANGAN"])
     else:
         bar = st.progress(0.0, text="Menyusun jadwal & rute...")
-        plan = opt.build_plan(good, quota, mode, factor, return_to_depot, time_limit,
+        plan = opt.build_plan(good_a, quota, mode, factor, return_to_depot, time_limit,
                               progress=lambda p: bar.progress(p, text=f"Menyusun rute... {int(p * 100)}%"))
         bar.empty()
     st.session_state.plans = {"A": plan, "B": None}
@@ -121,7 +131,8 @@ if st.button("🚀 Susun Jadwal", type="primary"):
                 bar_b.progress(0.02, text="Menghitung jarak jalan Plan A untuk pembanding...")
                 _, gA, rA = pb.apply_road(plan, ors, return_to_depot)
                 st.session_state.road["A"] = (gA, rA)
-                dfB, gB, rB = pb.build_plan_b(plan, ors, quota, factor, return_to_depot, time_limit, tol,
+                plan_tanpa_perkiraan = plan[plan["KETERANGAN"].fillna("") == ""]
+                dfB, gB, rB = pb.build_plan_b(plan_tanpa_perkiraan, ors, quota, factor, return_to_depot, time_limit, tol,
                                               step=lambda m, p: bar_b.progress(min(1.0, p), text=m))
                 st.session_state.plans["B"] = dfB
                 st.session_state.road["B"] = (gB, rB)
@@ -173,8 +184,11 @@ c5.metric("Kapasitas 2 minggu", cap)
 if meta["dup"]:
     st.info(f"{len(meta['dup'])} kode dobel diabaikan: {', '.join(meta['dup'][:20])}")
 n_masalah = len(nc_base) + len(meta["missing"])
+n_est = int(plans["A"]["KETERANGAN"].fillna("").str.startswith(opt.NO_LONGLAT).sum()) if "KETERANGAN" in plans["A"] else 0
 if n_masalah:
-    st.warning(f"Ada {n_masalah} outlet yang belum bisa dijadwalkan. Buka tab **⚠️ Data Belum Lengkap** untuk melengkapinya.")
+    st.warning(f"Ada {n_masalah} outlet tanpa koordinat / tidak ada di database. "
+               + (f"{n_est} di antaranya ditaruh di **Plan A** dengan lokasi perkiraan ({opt.NO_LONGLAT}). " if n_est else "")
+               + "Lengkapi koordinatnya di tab **⚠️ Data Belum Lengkap**.")
 if len(plan) > cap:
     st.warning(f"Jumlah outlet ({len(plan)}) melebihi kapasitas ({cap}). "
                f"Supaya semua masuk, kuota minimal **{-(-len(plan) // 11)}/hari**.")
@@ -207,9 +221,14 @@ def draw_map(df, geoms, key, pilih):
                 line.append(list(opt.DEPOT))
         folium.PolyLine(line, color=PALETTE[i], weight=1.5, opacity=0.8, dash_array="5, 6").add_to(m)
         for r in g.itertuples():
-            folium.CircleMarker([r.LATITUDE, r.LONGITUDE], radius=5, color=PALETTE[i], weight=1,
-                                fill=True, fill_color=PALETTE[i], fill_opacity=0.9,
-                                tooltip=f"{s} #{int(r.URUTAN)} — {r.CUSTOMERNO} {r.NAMA_OUTLET or ''}").add_to(m)
+            ket = getattr(r, "KETERANGAN", "")
+            ket = ket if isinstance(ket, str) else ""
+            perkiraan = ket.startswith(opt.NO_LONGLAT)
+            folium.CircleMarker([r.LATITUDE, r.LONGITUDE], radius=6 if perkiraan else 5, color=PALETTE[i],
+                                weight=2 if perkiraan else 1, fill=True,
+                                fill_color="white" if perkiraan else PALETTE[i], fill_opacity=0.9,
+                                tooltip=f"{s} #{int(r.URUTAN)} — {r.CUSTOMERNO} {r.NAMA_OUTLET or ''}"
+                                        + (f"  {ket}" if perkiraan else "")).add_to(m)
     for r in df[df["WEEK"] == opt.UNSCHEDULED].itertuples():
         folium.CircleMarker([r.LATITUDE, r.LONGITUDE], radius=6, color="black",
                             tooltip=f"BELUM TERJADWAL {r.CUSTOMERNO}").add_to(m)
@@ -238,13 +257,14 @@ with tab_edit:
                 "Lalu klik salah satu tombol di bawah tabel.")
     with st.form("revisi"):
         edited = st.data_editor(
-            plan[["WEEK", "HARI", "URUTAN", "CUSTOMERNO", "NAMA_OUTLET", "ALAMAT", "JARAK_KM", "KUMULATIF_KM"]],
+            plan[[c for c in ["WEEK", "HARI", "URUTAN", "CUSTOMERNO", "NAMA_OUTLET", "ALAMAT", "JARAK_KM",
+                              "KUMULATIF_KM", "KETERANGAN"] if c in plan.columns]],
             column_config={
                 "WEEK": st.column_config.SelectboxColumn("Week", options=opt.WEEKS + [opt.UNSCHEDULED], required=True),
                 "HARI": st.column_config.SelectboxColumn("Hari", options=opt.HARI + [opt.UNSCHEDULED], required=True),
                 "URUTAN": st.column_config.NumberColumn("Urutan", min_value=0, step=0.5),
             },
-            disabled=["CUSTOMERNO", "NAMA_OUTLET", "ALAMAT", "JARAK_KM", "KUMULATIF_KM"],
+            disabled=["CUSTOMERNO", "NAMA_OUTLET", "ALAMAT", "JARAK_KM", "KUMULATIF_KM", "KETERANGAN"],
             hide_index=True, height=500, use_container_width=True)
         b1, b2 = st.columns(2)
         hitung = b1.form_submit_button("🔁 Simpan revisi (pakai urutan saya)")
@@ -394,7 +414,9 @@ with tab_fix:
                 new = siap.drop(columns=["_OK", "KOORDINAT_GMAPS"])
                 for k in ("A", "B"):
                     if plans[k] is not None:
-                        save_plan(opt.add_outlets(plans[k], new, quota, factor, return_to_depot, time_limit), k)
+                        base_k = plans[k][~plans[k]["CUSTOMERNO"].isin(new["CUSTOMERNO"])]   # buang lokasi perkiraan
+                        save_plan(opt.add_outlets(base_k, new.assign(KETERANGAN=""), quota, factor,
+                                                  return_to_depot, time_limit), k)
                 st.session_state.nc_base = cur[~cur["_OK"]].drop(columns="_OK").reset_index(drop=True)
                 st.session_state.nc_ver += 1
                 st.session_state.fix_msg = True

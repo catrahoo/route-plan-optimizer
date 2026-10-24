@@ -78,3 +78,22 @@ def update_coords(customerno: str, lat: float, lon: float):
     get_client().table("outlet_master").update(
         {"latitude": float(lat), "longitude": float(lon)}).eq("customerno", customerno).execute()
     fetch_outlets.clear()
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_district_refs(districts: tuple) -> pd.DataFrame:
+    """Outlet berkoordinat di Sales District tertentu (acuan perkiraan lokasi outlet tanpa koordinat)."""
+    sb, rows = get_client(), []
+    for dist in districts:
+        start = 0
+        while True:
+            res = (sb.table("outlet_master")
+                   .select("customerno,alamat,sales_district,latitude,longitude")
+                   .eq("sales_district", dist).not_.is_("latitude", "null")
+                   .range(start, start + 999).execute().data)
+            rows += res
+            if len(res) < 1000:
+                break
+            start += 1000
+    df = pd.DataFrame(rows, columns=["customerno", "alamat", "sales_district", "latitude", "longitude"])
+    return df.rename(columns=str.upper)
