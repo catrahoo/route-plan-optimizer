@@ -79,10 +79,8 @@ st.sidebar.subheader("🛣️ Plan B (by jalan)")
 if ors:
     use_b = st.sidebar.checkbox("Buat juga Plan B", value=True,
                                 help="Memakai jarak jalan sungguhan (OpenRouteService). Butuh ±2–3 menit.")
-    tol = st.sidebar.number_input("Toko terlewati boleh membuat hari lebih dari kuota (toko/hari)", 0, 10, 0,
-                                  help="0 = jumlah per hari tetap pas kuota. Isi 1–3 bila boleh sedikit lebih.")
 else:
-    use_b, tol = False, 0
+    use_b = False
     st.sidebar.info("Plan B belum aktif. Tambahkan API key OpenRouteService di Secrets "
                     "(bagian `[ors]`, isi `key = \"...\"`).")
 st.sidebar.markdown("---")
@@ -132,7 +130,7 @@ if st.button("🚀 Susun Jadwal", type="primary"):
                 _, gA, rA = pb.apply_road(plan, ors, return_to_depot)
                 st.session_state.road["A"] = (gA, rA)
                 plan_tanpa_perkiraan = plan[plan["KETERANGAN"].fillna("") == ""]
-                dfB, gB, rB = pb.build_plan_b(plan_tanpa_perkiraan, ors, quota, factor, return_to_depot, time_limit, tol,
+                dfB, gB, rB = pb.build_plan_b(plan_tanpa_perkiraan, ors, quota, factor, return_to_depot, time_limit,
                                               step=lambda m, p: bar_b.progress(min(1.0, p), text=m))
                 st.session_state.plans["B"] = dfB
                 st.session_state.road["B"] = (gB, rB)
@@ -317,12 +315,9 @@ with tab_sum:
             dfr = pb.apply_road(plans[k], ors, return_to_depot)[0] if k == "A" else plans[k]
             sm = opt.summary(dfr, quota, factor, return_to_depot, r)
             rows.append({"Plan": nama, "Total km jalan (2 minggu)": round(sm["TOTAL_KM"].sum(), 1),
-                         "Rata-rata km/hari": round(sm["TOTAL_KM"].sum() / max(1, (sm["JUMLAH_OUTLET"] > 0).sum()), 1),
-                         "Toko terlewati rute hari lain": len(pb.passby_table(plans[k], g))})
+                         "Rata-rata km/hari": round(sm["TOTAL_KM"].sum() / max(1, (sm["JUMLAH_OUTLET"] > 0).sum()), 1)})
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-        st.caption("Km dihitung lewat jalan sungguhan (OpenRouteService) untuk kedua plan. "
-                   "Toko terlewati = toko yang berjarak ≤30 m dari rute kunjungan hari lain "
-                   "(perjalanan berangkat/pulang kantor tidak dihitung).")
+        st.caption("Km dihitung lewat jalan sungguhan (OpenRouteService) untuk kedua plan.")
     st.subheader(f"Rincian per hari — Plan {active}")
     st.dataframe(ring, hide_index=True, use_container_width=True)
     over = ring[ring["SELISIH"] > 0]
@@ -331,11 +326,6 @@ with tab_sum:
                    ", ".join(f"{r.WEEK}-{r.HARI} (+{r.SELISIH})" for r in over.itertuples()))
     label_km = "Total jarak 2 minggu (jalan)" if ret_active is not None else "Total jarak 2 minggu (perkiraan)"
     st.metric(label_km, f"{ring['TOTAL_KM'].sum():,.1f} km")
-    if road.get(active):
-        tb = pb.passby_table(plan, road[active][0])
-        if len(tb):
-            with st.expander(f"Daftar toko terlewati rute hari lain ({len(tb)})"):
-                st.dataframe(tb, hide_index=True, use_container_width=True)
 
 with tab_fix:
     st.subheader(f"📍 Outlet tanpa koordinat / koordinat di luar area ({len(nc_base)})")

@@ -1,5 +1,5 @@
 """Plan B: pembagian hari & urutan kunjungan berdasarkan jarak JALAN (OpenRouteService),
-plus perbaikan "toko terlewati" (toko yang dilewati rute hari lain dipindah ke hari itu)."""
+tanpa hitungan "toko terlewati" supaya proses cepat."""
 import numpy as np
 import pandas as pd
 from scipy.optimize import linear_sum_assignment
@@ -282,29 +282,8 @@ def build_plan_b(plan_a, ors, quota, factor, return_to_depot, time_limit_s=2, to
     df = reorder(df, set(zip(df.loc[idx, "WEEK"], df.loc[idx, "HARI"])))
     df = opt.compute_distances(df, factor)
 
-    # 3) ambil garis rute jalan, cek toko terlewati, perbaiki
+    # 3) ambil garis rute jalan & jarak per kaki
     step("Mengambil garis rute jalan...", 0.7)
     df, geoms, ret = apply_road(df, ors, return_to_depot)
-    best = (df, geoms, ret)
-    best_score = _score(df, geoms, ret, quota, factor, return_to_depot)
-    tried, i = set(), 0
-    while i < 12:                       # maksimal 12 percobaan perpindahan
-        table = passby_table(best[0], best[1])
-        todo = [k for k, c in enumerate(table["CUSTOMERNO"]) if c not in tried]
-        if not todo:
-            break
-        k = todo[0]
-        tried.add(table.iloc[k]["CUSTOMERNO"])
-        i += 1
-        step(f"Memperbaiki toko terlewati ({i})...", min(0.95, 0.8 + i * 0.006))
-        cand, changed = _repair(best[0], best[1], quota, tol, factor, only=k)
-        if not changed:
-            continue
-        cand = opt.compute_distances(reorder(cand, changed), factor)
-        cand, g2, r2 = apply_road(cand, ors, return_to_depot)
-        sc = _score(cand, g2, r2, quota, factor, return_to_depot)
-        if sc[0] < best_score[0] and sc[1] <= best_score[1] * 1.01:
-            best, best_score = (cand, g2, r2), sc
-    df, geoms, ret = best
     step("Selesai", 1.0)
     return df, geoms, ret
