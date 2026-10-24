@@ -6,10 +6,33 @@ COLS = ["customerno", "nama_outlet", "salesman", "alamat", "sales_office",
         "sales_group", "sales_district", "latitude", "longitude"]
 
 
+def _read_secrets():
+    """Baca URL & key Supabase dari Secrets (toleran beberapa format penulisan)."""
+    flat = {}
+    for k, v in st.secrets.items():
+        if hasattr(v, "items"):
+            for k2, v2 in v.items():
+                flat[f"{k}.{k2}".lower()] = v2
+        else:
+            flat[k.lower()] = v
+    url = next((flat[k] for k in ("supabase.url", "supabase_url", "url") if k in flat), None)
+    key = next((flat[k] for k in ("supabase.key", "supabase_key", "key",
+                                   "supabase.secret_key", "supabase.service_role_key") if k in flat), None)
+    if not url or not key:
+        st.error(
+            "❌ Secrets Supabase belum benar.\n\n"
+            f"Yang terbaca di Secrets sekarang: `{', '.join(sorted(flat)) or '(kosong)'}`\n\n"
+            "Buka **Manage app → ⋮ → Settings → Secrets**, hapus semua isinya, lalu paste persis seperti ini:\n\n"
+            "```\nAPP_PASSWORD = \"password-tim\"\n\n[supabase]\n"
+            "url = \"https://xxxx.supabase.co\"\nkey = \"sb_secret_xxxx\"\n```")
+        st.stop()
+    return str(url).strip().rstrip("/"), str(key).strip()
+
+
 @st.cache_resource
 def get_client():
-    s = st.secrets["supabase"]
-    return create_client(s["url"], s["key"])
+    url, key = _read_secrets()
+    return create_client(url, key)
 
 
 @st.cache_data(ttl=600, show_spinner=False)
