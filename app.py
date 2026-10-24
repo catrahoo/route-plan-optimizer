@@ -7,11 +7,13 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 import db
+import theme
 import optimizer as opt
 import plan_b as pb
 from roads import ORS, RoadError
 
-st.set_page_config(page_title="Route Plan Optimizer", page_icon="🗺️", layout="wide")
+st.set_page_config(page_title="Route Plan Optimizer", page_icon="📍", layout="wide")
+theme.inject()
 
 
 # ---------- Password ----------
@@ -19,7 +21,7 @@ def check_password() -> bool:
     # Password hanya aktif kalau APP_PASSWORD diisi di Secrets
     if st.session_state.get("auth_ok") or not st.secrets.get("APP_PASSWORD"):
         return True
-    st.title("🗺️ Route Plan Optimizer")
+    st.title("Route Plan Optimizer")
     pw = st.text_input("Masukkan password aplikasi", type="password")
     if pw and hmac.compare_digest(pw, st.secrets["APP_PASSWORD"]):
         st.session_state.auth_ok = True
@@ -62,7 +64,7 @@ def parse_codes(text: str):
 
 
 # ---------- Sidebar ----------
-st.sidebar.header("⚙️ Pengaturan")
+st.sidebar.header("Pengaturan")
 salesman = st.sidebar.text_input("Nama salesman (untuk nama file)")
 quota = st.sidebar.number_input("Kunjungan per hari (Senin–Jumat)", 5, 150, 40, step=1)
 st.sidebar.caption("Sabtu Half Day (50% Cover)")
@@ -89,7 +91,7 @@ with st.sidebar.expander("Pengaturan lanjutan"):
     factor = st.slider("Faktor jalan (× jarak garis lurus)", 1.0, 1.6, 1.3, 0.05)
     time_limit = st.slider("Waktu optimasi per hari (detik)", 1, 10, 2)
 st.sidebar.markdown("---")
-st.sidebar.subheader("🛣️ Plan B (by jalan)")
+st.sidebar.subheader("Plan B (by jalan)")
 if ors:
     use_b = st.sidebar.checkbox("Buat juga Plan B", value=True,
                                 help="Memakai jarak jalan sungguhan (OpenRouteService). Butuh ±2–3 menit.")
@@ -98,13 +100,13 @@ else:
     st.sidebar.info("Plan B belum aktif. Tambahkan API key OpenRouteService di Secrets "
                     "(bagian `[ors]`, isi `key = \"...\"`).")
 st.sidebar.markdown("---")
-st.sidebar.caption("Develop Program By Nurman Catra")
+st.sidebar.markdown('<div class="rp-credit">Develop Program By Nurman Catra</div>', unsafe_allow_html=True)
 
 # ---------- Input ----------
-st.title("🗺️ Route Plan Optimizer")
+theme.header()
 text = st.text_area("Silahkan Copas CODE CUSTOMER disini Ya....", height=180)
 
-if st.button("🚀 Susun Jadwal", type="primary"):
+if st.button("Susun Jadwal", type="primary"):
     codes, dup = parse_codes(text)
     if not codes:
         st.warning("Belum ada kode yang di-paste.")
@@ -149,10 +151,10 @@ if st.button("🚀 Susun Jadwal", type="primary"):
                 st.session_state.plans["B"] = dfB
                 st.session_state.road["B"] = (gB, rB)
                 st.session_state.active = "B"
-                stt.update(label="Plan B selesai ✅", state="complete", expanded=False)
+                stt.update(label="Plan B selesai", state="complete", expanded=False)
             except RoadError as e:
                 stt.update(label="Plan B gagal", state="error")
-                st.error(f"❌ {e}  \nPlan A tetap bisa dipakai.")
+                st.error(f"{e}  \nPlan A tetap bisa dipakai.")
     st.session_state.meta = {"n_input": len(codes), "dup": dup, "missing": missing}
     nc = nocoord.copy()
     nc.insert(3, "KOORDINAT_GMAPS", "")
@@ -200,16 +202,16 @@ n_est = int(plans["A"]["KETERANGAN"].fillna("").str.startswith(opt.NO_LONGLAT).s
 if n_masalah:
     st.warning(f"Ada {n_masalah} outlet tanpa koordinat / tidak ada di database. "
                + (f"{n_est} di antaranya ditaruh di **Plan A** dengan lokasi perkiraan ({opt.NO_LONGLAT}). " if n_est else "")
-               + "Lengkapi koordinatnya di tab **⚠️ Data Belum Lengkap**.")
+               + "Lengkapi koordinatnya di tab **Data Belum Lengkap**.")
 if len(plan) > cap:
     st.warning(f"Jumlah outlet ({len(plan)}) melebihi kapasitas ({cap}). "
                f"Supaya semua masuk, kuota minimal **{-(-len(plan) * quota // max(cap, 1))}/hari**.")
 if st.session_state.pop("fix_msg", None):
-    st.success("✅ Koordinat tersimpan ke database dan outlet sudah dimasukkan ke jadwal (hari terdekat).")
+    st.success("Koordinat tersimpan ke database dan outlet sudah dimasukkan ke jadwal (hari terdekat).")
 
 tab_a, tab_b, tab_edit, tab_sum, tab_fix, tab_exp = st.tabs(
-    ["🗺️ Peta A (by gruping)", "🛣️ Peta B (by jalan)", f"✏️ Revisi (Plan {active})", "📊 Ringkasan",
-     f"⚠️ Data Belum Lengkap ({n_masalah})", "📥 Download Excel"])
+    ["Peta A (by gruping)", "Peta B (by jalan)", f"Revisi (Plan {active})", "Ringkasan",
+     f"Data Belum Lengkap ({n_masalah})", "Download Excel"])
 
 PALETTE = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#00a5a5",
            "#f032e6", "#7a9c00", "#008080", "#9a6324", "#800000", "#000075"]
@@ -258,7 +260,7 @@ with tab_a:
 with tab_b:
     if plans["B"] is None:
         st.info("Plan B belum dibuat. Pastikan API key OpenRouteService sudah diisi di Secrets dan "
-                "centang **Buat juga Plan B** di sidebar, lalu klik **🚀 Susun Jadwal** lagi.")
+                "centang **Buat juga Plan B** di sidebar, lalu klik **Susun Jadwal** lagi.")
     else:
         pbb = st.selectbox("Tampilkan hari", SLOT_OPTS, key="pilih_b")
         draw_map(plans["B"], road["B"][0], "map_b", pbb)
@@ -279,8 +281,8 @@ with tab_edit:
             disabled=["CUSTOMERNO", "NAMA_OUTLET", "ALAMAT", "JARAK_KM", "KUMULATIF_KM", "KETERANGAN"],
             hide_index=True, height=500, use_container_width=True)
         b1, b2 = st.columns(2)
-        hitung = b1.form_submit_button("🔁 Simpan revisi (pakai urutan saya)")
-        optim = b2.form_submit_button("⚡ Simpan revisi + rapikan rute otomatis")
+        hitung = b1.form_submit_button("Simpan revisi (pakai urutan saya)")
+        optim = b2.form_submit_button("Simpan revisi + rapikan rute otomatis")
     if hitung or optim:
         old = plan.set_index("CUSTOMERNO")
         new = plan.copy()
@@ -342,7 +344,7 @@ with tab_sum:
     st.metric(label_km, f"{ring['TOTAL_KM'].sum():,.1f} km")
 
 with tab_fix:
-    st.subheader(f"📍 Outlet tanpa koordinat / koordinat di luar area ({len(nc_base)})")
+    st.subheader(f"Outlet tanpa koordinat / koordinat di luar area ({len(nc_base)})")
     if nc_base.empty:
         st.success("Semua outlet sudah punya koordinat.")
     else:
@@ -351,7 +353,7 @@ with tab_fix:
             "1. **Paste dari Google Maps** ke kolom *Koordinat GMaps* (contoh: `-7.2592, 112.6936`), atau\n"
             "2. Ketik langsung di kolom **Latitude** dan **Longitude**, atau\n"
             "3. **Pilih outlet** di bawah tabel, lalu **klik lokasinya di peta**.\n\n"
-            "Setelah itu klik **💾 Simpan koordinat**. Koordinat tersimpan ke database "
+            "Setelah itu klik **Simpan koordinat**. Koordinat tersimpan ke database "
             "dan outlet otomatis masuk ke jadwal.")
         edited_nc = st.data_editor(
             nc_base[["CUSTOMERNO", "NAMA_OUTLET", "ALAMAT", "KOORDINAT_GMAPS", "LATITUDE", "LONGITUDE"]],
@@ -375,7 +377,7 @@ with tab_fix:
         cur["_OK"] = opt.valid_coord(cur["LATITUDE"], cur["LONGITUDE"]).to_numpy()
 
         label = (cur["CUSTOMERNO"] + " — " + cur["NAMA_OUTLET"].fillna("")
-                 + cur["_OK"].map({True: "  ✅", False: ""})).tolist()
+                 + cur["_OK"].map({True: "  ✓", False: ""})).tolist()
         idx = st.selectbox("Pilih outlet yang mau ditandai di peta", range(len(cur)),
                            format_func=lambda i: label[i])
         sel = cur.iloc[idx]
@@ -392,7 +394,7 @@ with tab_fix:
         if sel["_OK"]:
             folium.Marker([sel.LATITUDE, sel.LONGITUDE], tooltip=f"{sel.CUSTOMERNO} {sel.NAMA_OUTLET or ''}",
                           icon=folium.Icon(color="green", icon="star")).add_to(m2)
-        st.caption(f"👆 Klik di peta untuk menaruh lokasi **{sel.CUSTOMERNO} — {sel.NAMA_OUTLET or ''}**. "
+        st.caption(f"Klik di peta untuk menaruh lokasi **{sel.CUSTOMERNO} — {sel.NAMA_OUTLET or ''}**. "
                    "Titik abu-abu = outlet yang sudah terjadwal.")
         out = st_folium(m2, height=500, use_container_width=True,
                         returned_objects=["last_clicked"], key="map_fix")
@@ -411,7 +413,7 @@ with tab_fix:
         salah = cur[cur["LATITUDE"].notna() & ~cur["_OK"]]
         if len(salah):
             st.warning("Koordinat ini di luar Surabaya Raya, cek lagi: " + ", ".join(salah["CUSTOMERNO"]))
-        if st.button(f"💾 Simpan koordinat ({len(siap)} outlet)", type="primary", disabled=siap.empty):
+        if st.button(f"Simpan koordinat ({len(siap)} outlet)", type="primary", disabled=siap.empty):
             with st.spinner("Menyimpan ke database..."):
                 for r in siap.itertuples():
                     db.update_coords(r.CUSTOMERNO, r.LATITUDE, r.LONGITUDE)
@@ -426,7 +428,7 @@ with tab_fix:
                 st.session_state.fix_msg = True
             st.rerun()
 
-    st.subheader(f"❓ Kode tidak ada di database ({len(meta['missing'])})")
+    st.subheader(f"Kode tidak ada di database ({len(meta['missing'])})")
     if meta["missing"]:
         st.caption("Kode ini tidak ada di master outlet. Cek apakah salah ketik, atau outlet baru yang belum ada di master.")
         st.dataframe(pd.DataFrame({"CUSTOMERNO": meta["missing"]}), hide_index=True)
@@ -439,7 +441,7 @@ with tab_exp:
             "Hari libur": ", ".join(f"{w}-{h}" for w, h in sorted(off_days)) or "-",
             "Faktor jalan": factor, "Pulang ke titik awal": return_to_depot,
             "Titik awal": f"{opt.DEPOT[0]}, {opt.DEPOT[1]}"}
-    st.download_button("📥 Download Excel", data=opt.to_excel_bytes(plan, ring, info),
+    st.download_button("Download Excel", data=opt.to_excel_bytes(plan, ring, info),
                        file_name=f"RoutePlan_{salesman or 'salesman'}_Plan{active}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                        type="primary")
