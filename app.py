@@ -151,8 +151,8 @@ if "plans" not in st.session_state:
 
 plans, road, meta = st.session_state.plans, st.session_state.road, st.session_state.meta
 if plans["B"] is not None:
-    pilihan = st.radio("Plan yang dipakai untuk **Revisi** & **Download**", ["Plan B (by jalan)", "Plan A (garis lurus)"],
-                       index=0 if st.session_state.active == "B" else 1, horizontal=True)
+    pilihan = st.radio("Plan yang dipakai untuk **Revisi** & **Download**", ["Plan A (by gruping)", "Plan B (by jalan)"],
+                       index=1 if st.session_state.active == "B" else 0, horizontal=True)
     st.session_state.active = "B" if pilihan.startswith("Plan B") else "A"
 active = st.session_state.active
 plan = plans[active]
@@ -194,7 +194,7 @@ if st.session_state.pop("fix_msg", None):
     st.success("✅ Koordinat tersimpan ke database dan outlet sudah dimasukkan ke jadwal (hari terdekat).")
 
 tab_a, tab_b, tab_edit, tab_sum, tab_fix, tab_exp = st.tabs(
-    ["🗺️ Peta A (garis lurus)", "🛣️ Peta B (by jalan)", f"✏️ Revisi (Plan {active})", "📊 Ringkasan",
+    ["🗺️ Peta A (by gruping)", "🛣️ Peta B (by jalan)", f"✏️ Revisi (Plan {active})", "📊 Ringkasan",
      f"⚠️ Data Belum Lengkap ({n_masalah})", "📥 Download Excel"])
 
 PALETTE = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#00a5a5",
@@ -310,7 +310,7 @@ with tab_sum:
     if plans["B"] is not None and road["A"] is not None:
         st.subheader("Perbandingan Plan A vs Plan B")
         rows = []
-        for k, nama in [("A", "Plan A (garis lurus)"), ("B", "Plan B (by jalan)")]:
+        for k, nama in [("A", "Plan A (by gruping)"), ("B", "Plan B (by jalan)")]:
             g, r = road[k]
             dfr = pb.apply_road(plans[k], ors, return_to_depot)[0] if k == "A" else plans[k]
             sm = opt.summary(dfr, quota, factor, return_to_depot, r)
@@ -420,7 +420,7 @@ with tab_fix:
         st.success("Semua kode ada di database.")
 
 with tab_exp:
-    info = {"Salesman": salesman, "Metode": "Plan B (by jalan)" if active == "B" else "Plan A (garis lurus)",
+    info = {"Salesman": salesman, "Metode": "Plan B (by jalan)" if active == "B" else "Plan A (by gruping)",
             "Kuota/hari": quota, "Kuota Sabtu": quota // 2, "Mode": mode,
             "Faktor jalan": factor, "Pulang ke titik awal": return_to_depot,
             "Titik awal": f"{opt.DEPOT[0]}, {opt.DEPOT[1]}"}
