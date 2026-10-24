@@ -188,7 +188,7 @@ tab_a, tab_b, tab_edit, tab_sum, tab_fix, tab_exp = st.tabs(
 PALETTE = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#00a5a5",
            "#f032e6", "#7a9c00", "#008080", "#9a6324", "#800000", "#000075"]
 
-def draw_map(df, geoms, key, pilih, passby=()):
+def draw_map(df, geoms, key, pilih):
     slots = list(opt.build_slots(quota)["SLOT"])
     m = folium.Map(location=opt.DEPOT, zoom_start=12, tiles="OpenStreetMap")
     folium.Marker(opt.DEPOT, tooltip="TITIK AWAL", icon=folium.Icon(color="red", icon="home")).add_to(m)
@@ -205,14 +205,11 @@ def draw_map(df, geoms, key, pilih, passby=()):
             line = [list(opt.DEPOT)] + g[["LATITUDE", "LONGITUDE"]].values.tolist()
             if return_to_depot:
                 line.append(list(opt.DEPOT))
-        folium.PolyLine(line, color=PALETTE[i], weight=3 if geoms else 2, opacity=0.8).add_to(m)
+        folium.PolyLine(line, color=PALETTE[i], weight=1.5, opacity=0.8, dash_array="5, 6").add_to(m)
         for r in g.itertuples():
-            lewat = r.CUSTOMERNO in passby
-            folium.CircleMarker([r.LATITUDE, r.LONGITUDE], radius=7 if lewat else 5,
-                                color="black" if lewat else PALETTE[i], weight=3 if lewat else 1,
+            folium.CircleMarker([r.LATITUDE, r.LONGITUDE], radius=5, color=PALETTE[i], weight=1,
                                 fill=True, fill_color=PALETTE[i], fill_opacity=0.9,
-                                tooltip=f"{s} #{int(r.URUTAN)} — {r.CUSTOMERNO} {r.NAMA_OUTLET or ''}"
-                                        + ("  ⚠️ terlewati rute hari lain" if lewat else "")).add_to(m)
+                                tooltip=f"{s} #{int(r.URUTAN)} — {r.CUSTOMERNO} {r.NAMA_OUTLET or ''}").add_to(m)
     for r in df[df["WEEK"] == opt.UNSCHEDULED].itertuples():
         folium.CircleMarker([r.LATITUDE, r.LONGITUDE], radius=6, color="black",
                             tooltip=f"BELUM TERJADWAL {r.CUSTOMERNO}").add_to(m)
@@ -225,10 +222,7 @@ with tab_a:
     pa = st.selectbox("Tampilkan hari", SLOT_OPTS, key="pilih_a")
     jalan_a = road["A"] is not None and st.checkbox("Tampilkan garis jalan sungguhan", value=False,
                                                      disabled=road["A"] is None)
-    pbA = set(pb.passby_table(plans["A"], road["A"][0])["CUSTOMERNO"]) if road["A"] else set()
-    st.caption("Garis = urutan kunjungan (garis lurus antar toko). "
-               "Titik bergaris tepi hitam = toko yang terlewati rute kunjungan hari lain.")
-    draw_map(plans["A"], road["A"][0] if jalan_a else None, "map_a", pa, pbA)
+    draw_map(plans["A"], road["A"][0] if jalan_a else None, "map_a", pa)
 
 with tab_b:
     if plans["B"] is None:
@@ -236,10 +230,7 @@ with tab_b:
                 "centang **Buat juga Plan B** di sidebar, lalu klik **🚀 Susun Jadwal** lagi.")
     else:
         pbb = st.selectbox("Tampilkan hari", SLOT_OPTS, key="pilih_b")
-        pbB = set(pb.passby_table(plans["B"], road["B"][0])["CUSTOMERNO"])
-        st.caption("Garis mengikuti jalan sungguhan. "
-                   "Titik bergaris tepi hitam = toko yang terlewati rute kunjungan hari lain.")
-        draw_map(plans["B"], road["B"][0], "map_b", pbb, pbB)
+        draw_map(plans["B"], road["B"][0], "map_b", pbb)
 
 with tab_edit:
     st.markdown("**Cara revisi:** ubah kolom **Week / Hari** untuk memindah outlet, "
