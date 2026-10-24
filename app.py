@@ -64,8 +64,8 @@ def parse_codes(text: str):
 # ---------- Sidebar ----------
 st.sidebar.header("⚙️ Pengaturan")
 salesman = st.sidebar.text_input("Nama salesman (untuk nama file)")
-quota = st.sidebar.number_input("Kunjungan per hari (Senin–Jumat)", 5, 150, 50, step=1)
-st.sidebar.caption(f"Sabtu = **{quota // 2}** outlet · Kapasitas 2 minggu = **{opt.capacity(quota)}** outlet")
+quota = st.sidebar.number_input("Kunjungan per hari (Senin–Jumat)", 5, 150, 40, step=1)
+st.sidebar.caption("Sabtu Half Day (50% Cover)")
 mode = st.sidebar.radio("Kalau jumlah kode tidak pas dengan kapasitas",
                         ["Proporsional", "Batasi kuota"],
                         help="Proporsional: semua kode masuk, dibagi rata.\n\n"
