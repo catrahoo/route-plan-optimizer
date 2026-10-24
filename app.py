@@ -8,6 +8,8 @@ from streamlit_folium import st_folium
 
 import db
 import optimizer as opt
+import plan_b as pb
+from roads import ORS, RoadError
 
 st.set_page_config(page_title="Route Plan Optimizer", page_icon="🗺️", layout="wide")
 
@@ -29,6 +31,22 @@ def check_password() -> bool:
 
 if not check_password():
     st.stop()
+
+
+def get_ors():
+    """Objek OpenRouteService (disimpan di sesi supaya hasil jalan tidak diminta ulang)."""
+    sec = st.secrets.get("ors", {})
+    key = sec.get("key") if hasattr(sec, "get") else None
+    key = key or st.secrets.get("ORS_KEY")
+    if not key:
+        return None
+    if st.session_state.get("ors_key") != key:
+        st.session_state.ors_obj = ORS(key)
+        st.session_state.ors_key = key
+    return st.session_state.ors_obj
+
+
+ors = get_ors()
 
 
 def parse_codes(text: str):
@@ -57,6 +75,17 @@ with st.sidebar.expander("Pengaturan lanjutan"):
     factor = st.slider("Faktor jalan (× jarak garis lurus)", 1.0, 1.6, 1.3, 0.05)
     time_limit = st.slider("Waktu optimasi per hari (detik)", 1, 10, 2)
 st.sidebar.markdown("---")
+st.sidebar.subheader("🛣️ Plan B (by jalan)")
+if ors:
+    use_b = st.sidebar.checkbox("Buat juga Plan B", value=True,
+                                help="Memakai jarak jalan sungguhan (OpenRouteService). Butuh ±2–3 menit.")
+    tol = st.sidebar.number_input("Toko terlewati boleh membuat hari lebih dari kuota (toko/hari)", 0, 10, 0,
+                                  help="0 = jumlah per hari tetap pas kuota. Isi 1–3 bila boleh sedikit lebih.")
+else:
+    use_b, tol = False, 0
+    st.sidebar.info("Plan B belum aktif. Tambahkan API key OpenRouteService di Secrets "
+                    "(bagian `[ors]`, isi `key = \"...\"`).")
+st.sidebar.markdown("---")
 st.sidebar.caption("Develop Program By Nurman Catra")
 
 # ---------- Input ----------
@@ -82,7 +111,25 @@ if st.button("🚀 Susun Jadwal", type="primary"):
         plan = opt.build_plan(good, quota, mode, factor, return_to_depot, time_limit,
                               progress=lambda p: bar.progress(p, text=f"Menyusun rute... {int(p * 100)}%"))
         bar.empty()
-    st.session_state.plan = plan
+    st.session_state.plans = {"A": plan, "B": None}
+    st.session_state.road = {"A": None, "B": None}
+    st.session_state.active = "A"
+    if use_b and not good.empty:
+        with st.status("Menyusun Plan B (by jalan)... ±2–3 menit", expanded=True) as stt:
+            bar_b = st.progress(0.0)
+            try:
+                bar_b.progress(0.02, text="Menghitung jarak jalan Plan A untuk pembanding...")
+                _, gA, rA = pb.apply_road(plan, ors, return_to_depot)
+                st.session_state.road["A"] = (gA, rA)
+                dfB, gB, rB = pb.build_plan_b(plan, ors, quota, factor, return_to_depot, time_limit, tol,
+                                              step=lambda m, p: bar_b.progress(min(1.0, p), text=m))
+                st.session_state.plans["B"] = dfB
+                st.session_state.road["B"] = (gB, rB)
+                st.session_state.active = "B"
+                stt.update(label="Plan B selesai ✅", state="complete", expanded=False)
+            except RoadError as e:
+                stt.update(label="Plan B gagal", state="error")
+                st.error(f"❌ {e}  \nPlan A tetap bisa dipakai.")
     st.session_state.meta = {"n_input": len(codes), "dup": dup, "missing": missing}
     nc = nocoord.copy()
     nc.insert(3, "KOORDINAT_GMAPS", "")
@@ -90,10 +137,30 @@ if st.button("🚀 Susun Jadwal", type="primary"):
     st.session_state.nc_ver = st.session_state.get("nc_ver", 0) + 1
     st.session_state.pop("last_click", None)
 
-if "plan" not in st.session_state:
+if "plans" not in st.session_state:
     st.stop()
 
-plan, meta = st.session_state.plan, st.session_state.meta
+plans, road, meta = st.session_state.plans, st.session_state.road, st.session_state.meta
+if plans["B"] is not None:
+    pilihan = st.radio("Plan yang dipakai untuk **Revisi** & **Download**", ["Plan B (by jalan)", "Plan A (garis lurus)"],
+                       index=0 if st.session_state.active == "B" else 1, horizontal=True)
+    st.session_state.active = "B" if pilihan.startswith("Plan B") else "A"
+active = st.session_state.active
+plan = plans[active]
+
+
+def save_plan(df, key=None):
+    """Simpan plan (A/B) lalu perbarui jarak jalan kalau tersedia."""
+    key = key or active
+    if ors and (key == "B" or road.get(key) is not None):
+        try:
+            df_road, g, r = pb.apply_road(df, ors, return_to_depot)
+            road[key] = (g, r)
+            if key == "B":          # Plan B memakai jarak jalan; Plan A tetap garis lurus
+                df = df_road
+        except RoadError as e:
+            st.warning(f"Jarak jalan tidak bisa diperbarui: {e}")
+    plans[key] = df
 nc_base = st.session_state.get("nc_base", pd.DataFrame(columns=["CUSTOMERNO", "NAMA_OUTLET", "ALAMAT", "KOORDINAT_GMAPS", "LATITUDE", "LONGITUDE"]))
 st.session_state.setdefault("nc_ver", 0)
 cap = opt.capacity(quota)
@@ -114,35 +181,65 @@ if len(plan) > cap:
 if st.session_state.pop("fix_msg", None):
     st.success("✅ Koordinat tersimpan ke database dan outlet sudah dimasukkan ke jadwal (hari terdekat).")
 
-tab_map, tab_edit, tab_sum, tab_fix, tab_exp = st.tabs(
-    ["🗺️ Peta", "✏️ Revisi", "📊 Ringkasan", f"⚠️ Data Belum Lengkap ({n_masalah})", "📥 Download Excel"])
+tab_a, tab_b, tab_edit, tab_sum, tab_fix, tab_exp = st.tabs(
+    ["🗺️ Peta A (garis lurus)", "🛣️ Peta B (by jalan)", f"✏️ Revisi (Plan {active})", "📊 Ringkasan",
+     f"⚠️ Data Belum Lengkap ({n_masalah})", "📥 Download Excel"])
 
 PALETTE = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#00a5a5",
            "#f032e6", "#7a9c00", "#008080", "#9a6324", "#800000", "#000075"]
 
-with tab_map:
+def draw_map(df, geoms, key, pilih, passby=()):
     slots = list(opt.build_slots(quota)["SLOT"])
-    pilih = st.selectbox("Tampilkan hari", ["Semua"] + slots)
     m = folium.Map(location=opt.DEPOT, zoom_start=12, tiles="OpenStreetMap")
     folium.Marker(opt.DEPOT, tooltip="TITIK AWAL", icon=folium.Icon(color="red", icon="home")).add_to(m)
     for i, s in enumerate(slots):
         if pilih not in ("Semua", s):
             continue
-        g = plan[plan["SLOT"] == s].sort_values("URUTAN")
+        g = df[df["SLOT"] == s].sort_values("URUTAN")
         if g.empty:
             continue
-        pts = [list(opt.DEPOT)] + g[["LATITUDE", "LONGITUDE"]].values.tolist()
-        if return_to_depot:
-            pts.append(list(opt.DEPOT))
-        folium.PolyLine(pts, color=PALETTE[i], weight=2, opacity=0.8).add_to(m)
+        k = tuple(s.split(" - "))
+        if geoms and k in geoms:
+            line = geoms[k][0]
+        else:
+            line = [list(opt.DEPOT)] + g[["LATITUDE", "LONGITUDE"]].values.tolist()
+            if return_to_depot:
+                line.append(list(opt.DEPOT))
+        folium.PolyLine(line, color=PALETTE[i], weight=3 if geoms else 2, opacity=0.8).add_to(m)
         for r in g.itertuples():
-            folium.CircleMarker([r.LATITUDE, r.LONGITUDE], radius=5, color=PALETTE[i], fill=True,
-                                fill_opacity=0.9,
-                                tooltip=f"{s} #{int(r.URUTAN)} — {r.CUSTOMERNO} {r.NAMA_OUTLET or ''}").add_to(m)
-    for r in plan[plan["WEEK"] == opt.UNSCHEDULED].itertuples():
+            lewat = r.CUSTOMERNO in passby
+            folium.CircleMarker([r.LATITUDE, r.LONGITUDE], radius=7 if lewat else 5,
+                                color="black" if lewat else PALETTE[i], weight=3 if lewat else 1,
+                                fill=True, fill_color=PALETTE[i], fill_opacity=0.9,
+                                tooltip=f"{s} #{int(r.URUTAN)} — {r.CUSTOMERNO} {r.NAMA_OUTLET or ''}"
+                                        + ("  ⚠️ terlewati rute hari lain" if lewat else "")).add_to(m)
+    for r in df[df["WEEK"] == opt.UNSCHEDULED].itertuples():
         folium.CircleMarker([r.LATITUDE, r.LONGITUDE], radius=6, color="black",
                             tooltip=f"BELUM TERJADWAL {r.CUSTOMERNO}").add_to(m)
-    st_folium(m, height=600, use_container_width=True, returned_objects=[])
+    st_folium(m, height=600, use_container_width=True, returned_objects=[], key=key)
+
+
+SLOT_OPTS = ["Semua"] + list(opt.build_slots(quota)["SLOT"])
+
+with tab_a:
+    pa = st.selectbox("Tampilkan hari", SLOT_OPTS, key="pilih_a")
+    jalan_a = road["A"] is not None and st.checkbox("Tampilkan garis jalan sungguhan", value=False,
+                                                     disabled=road["A"] is None)
+    pbA = set(pb.passby_table(plans["A"], road["A"][0])["CUSTOMERNO"]) if road["A"] else set()
+    st.caption("Garis = urutan kunjungan (garis lurus antar toko). "
+               "Titik bergaris tepi hitam = toko yang terlewati rute kunjungan hari lain.")
+    draw_map(plans["A"], road["A"][0] if jalan_a else None, "map_a", pa, pbA)
+
+with tab_b:
+    if plans["B"] is None:
+        st.info("Plan B belum dibuat. Pastikan API key OpenRouteService sudah diisi di Secrets dan "
+                "centang **Buat juga Plan B** di sidebar, lalu klik **🚀 Susun Jadwal** lagi.")
+    else:
+        pbb = st.selectbox("Tampilkan hari", SLOT_OPTS, key="pilih_b")
+        pbB = set(pb.passby_table(plans["B"], road["B"][0])["CUSTOMERNO"])
+        st.caption("Garis mengikuti jalan sungguhan. "
+                   "Titik bergaris tepi hitam = toko yang terlewati rute kunjungan hari lain.")
+        draw_map(plans["B"], road["B"][0], "map_b", pbb, pbB)
 
 with tab_edit:
     st.markdown("**Cara revisi:** ubah kolom **Week / Hari** untuk memindah outlet, "
@@ -185,19 +282,49 @@ with tab_edit:
                     continue
                 sub = new[(new["WEEK"] == w) & (new["HARI"] == h)]
                 if len(sub):
+                    if active == "B" and ors:
+                        try:
+                            new.loc[sub.index, "URUTAN"] = pb.optimize_slot_road(
+                                sub, ors, factor, return_to_depot, time_limit)
+                            continue
+                        except RoadError as e:
+                            st.warning(f"Pakai garis lurus untuk {w}-{h}: {e}")
                     new.loc[sub.index, "URUTAN"] = opt.optimize_slot(sub, factor, return_to_depot, time_limit)
-        st.session_state.plan = opt.compute_distances(new, factor)
+        with st.spinner("Menghitung ulang jarak..."):
+            save_plan(opt.compute_distances(new, factor))
         st.rerun()
 
-ring = opt.summary(plan, quota, factor, return_to_depot)
+ret_active = road["B"][1] if active == "B" and road.get("B") else None
+ring = opt.summary(plan, quota, factor, return_to_depot, ret_active)
 
 with tab_sum:
+    if plans["B"] is not None and road["A"] is not None:
+        st.subheader("Perbandingan Plan A vs Plan B")
+        rows = []
+        for k, nama in [("A", "Plan A (garis lurus)"), ("B", "Plan B (by jalan)")]:
+            g, r = road[k]
+            dfr = pb.apply_road(plans[k], ors, return_to_depot)[0] if k == "A" else plans[k]
+            sm = opt.summary(dfr, quota, factor, return_to_depot, r)
+            rows.append({"Plan": nama, "Total km jalan (2 minggu)": round(sm["TOTAL_KM"].sum(), 1),
+                         "Rata-rata km/hari": round(sm["TOTAL_KM"].sum() / max(1, (sm["JUMLAH_OUTLET"] > 0).sum()), 1),
+                         "Toko terlewati rute hari lain": len(pb.passby_table(plans[k], g))})
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.caption("Km dihitung lewat jalan sungguhan (OpenRouteService) untuk kedua plan. "
+                   "Toko terlewati = toko yang berjarak ≤30 m dari rute kunjungan hari lain "
+                   "(perjalanan berangkat/pulang kantor tidak dihitung).")
+    st.subheader(f"Rincian per hari — Plan {active}")
     st.dataframe(ring, hide_index=True, use_container_width=True)
     over = ring[ring["SELISIH"] > 0]
     if len(over):
         st.warning("Hari yang melebihi kuota: " +
                    ", ".join(f"{r.WEEK}-{r.HARI} (+{r.SELISIH})" for r in over.itertuples()))
-    st.metric("Total jarak 2 minggu (perkiraan)", f"{ring['TOTAL_KM'].sum():,.1f} km")
+    label_km = "Total jarak 2 minggu (jalan)" if ret_active is not None else "Total jarak 2 minggu (perkiraan)"
+    st.metric(label_km, f"{ring['TOTAL_KM'].sum():,.1f} km")
+    if road.get(active):
+        tb = pb.passby_table(plan, road[active][0])
+        if len(tb):
+            with st.expander(f"Daftar toko terlewati rute hari lain ({len(tb)})"):
+                st.dataframe(tb, hide_index=True, use_container_width=True)
 
 with tab_fix:
     st.subheader(f"📍 Outlet tanpa koordinat / koordinat di luar area ({len(nc_base)})")
@@ -274,7 +401,9 @@ with tab_fix:
                 for r in siap.itertuples():
                     db.update_coords(r.CUSTOMERNO, r.LATITUDE, r.LONGITUDE)
                 new = siap.drop(columns=["_OK", "KOORDINAT_GMAPS"])
-                st.session_state.plan = opt.add_outlets(plan, new, quota, factor, return_to_depot, time_limit)
+                for k in ("A", "B"):
+                    if plans[k] is not None:
+                        save_plan(opt.add_outlets(plans[k], new, quota, factor, return_to_depot, time_limit), k)
                 st.session_state.nc_base = cur[~cur["_OK"]].drop(columns="_OK").reset_index(drop=True)
                 st.session_state.nc_ver += 1
                 st.session_state.fix_msg = True
@@ -288,10 +417,11 @@ with tab_fix:
         st.success("Semua kode ada di database.")
 
 with tab_exp:
-    info = {"Salesman": salesman, "Kuota/hari": quota, "Kuota Sabtu": quota // 2, "Mode": mode,
+    info = {"Salesman": salesman, "Metode": "Plan B (by jalan)" if active == "B" else "Plan A (garis lurus)",
+            "Kuota/hari": quota, "Kuota Sabtu": quota // 2, "Mode": mode,
             "Faktor jalan": factor, "Pulang ke titik awal": return_to_depot,
             "Titik awal": f"{opt.DEPOT[0]}, {opt.DEPOT[1]}"}
     st.download_button("📥 Download Excel", data=opt.to_excel_bytes(plan, ring, info),
-                       file_name=f"RoutePlan_{salesman or 'salesman'}.xlsx",
+                       file_name=f"RoutePlan_{salesman or 'salesman'}_Plan{active}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                        type="primary")

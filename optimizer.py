@@ -267,12 +267,15 @@ def compute_distances(df: pd.DataFrame, factor: float) -> pd.DataFrame:
     return df
 
 
-def summary(df: pd.DataFrame, quota: int, factor: float, return_to_depot: bool) -> pd.DataFrame:
+def summary(df: pd.DataFrame, quota: int, factor: float, return_to_depot: bool,
+            return_km: dict = None) -> pd.DataFrame:
     rows = []
     for s in build_slots(quota).itertuples():
         sub = df[(df["WEEK"] == s.WEEK) & (df["HARI"] == s.HARI)].sort_values("URUTAN")
         km = sub["JARAK_KM"].sum()
-        if return_to_depot and len(sub):
+        if return_to_depot and len(sub) and return_km is not None:
+            km += return_km.get((s.WEEK, s.HARI), 0.0)
+        elif return_to_depot and len(sub):
             last = sub.iloc[-1]
             km += haversine_matrix([last.LATITUDE, DEPOT[0]], [last.LONGITUDE, DEPOT[1]])[0, 1] * factor
         rows.append({"WEEK": s.WEEK, "HARI": s.HARI, "KUOTA": s.CAP, "JUMLAH_OUTLET": len(sub),
