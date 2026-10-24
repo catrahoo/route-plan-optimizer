@@ -14,7 +14,8 @@ st.set_page_config(page_title="Route Plan Optimizer", page_icon="🗺️", layou
 
 # ---------- Password ----------
 def check_password() -> bool:
-    if st.session_state.get("auth_ok"):
+    # Password hanya aktif kalau APP_PASSWORD diisi di Secrets
+    if st.session_state.get("auth_ok") or not st.secrets.get("APP_PASSWORD"):
         return True
     st.title("🗺️ Route Plan Optimizer")
     pw = st.text_input("Masukkan password aplikasi", type="password")
