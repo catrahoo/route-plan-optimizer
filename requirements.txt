@@ -1,0 +1,10 @@
+streamlit>=1.40
+pandas>=2.2
+numpy>=1.26
+scipy>=1.11
+ortools>=9.10
+supabase>=2.22
+folium>=0.17
+streamlit-folium>=0.22
+xlsxwriter>=3.2
+openpyxl>=3.1
