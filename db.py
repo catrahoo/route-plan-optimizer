@@ -88,12 +88,12 @@ def fetch_district_refs(districts: tuple) -> pd.DataFrame:
         start = 0
         while True:
             res = (sb.table("outlet_master")
-                   .select("customerno,alamat,sales_district,latitude,longitude")
+                   .select("customerno,nama_outlet,alamat,sales_district,latitude,longitude")
                    .eq("sales_district", dist).not_.is_("latitude", "null")
                    .range(start, start + 999).execute().data)
             rows += res
             if len(res) < 1000:
                 break
             start += 1000
-    df = pd.DataFrame(rows, columns=["customerno", "alamat", "sales_district", "latitude", "longitude"])
+    df = pd.DataFrame(rows, columns=["customerno", "nama_outlet", "alamat", "sales_district", "latitude", "longitude"])
     return df.rename(columns=str.upper)

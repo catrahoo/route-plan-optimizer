@@ -242,7 +242,9 @@ def estimate_coords(nocoord: pd.DataFrame, ref: pd.DataFrame) -> pd.DataFrame:
             if no is not None and same["_NO"].notna().any():
                 pick = same.loc[(same["_NO"] - no).abs().idxmin()]
             lat, lon = pick.LATITUDE, pick.LONGITUDE
-            ket = f"{NO_LONGLAT} dekat {pick.CUSTOMERNO} (alamat sama)"
+            nama = pick.get("NAMA_OUTLET") if hasattr(pick, "get") else None
+            nama = nama if isinstance(nama, str) and nama.strip() else pick.CUSTOMERNO
+            ket = f"{NO_LONGLAT} dekat {nama} (alamat sama)"
         elif len(dist):
             lat, lon = dist["LATITUDE"].median(), dist["LONGITUDE"].median()
             ket = f"{NO_LONGLAT} perkiraan Sales District {r.get('SALES_DISTRICT')}"

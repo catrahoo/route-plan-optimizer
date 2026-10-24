@@ -108,7 +108,7 @@ if st.button("🚀 Susun Jadwal", type="primary"):
     if len(nocoord):
         dists = tuple(sorted(set(nocoord["SALES_DISTRICT"].dropna())))
         with st.spinner("Memperkirakan lokasi outlet tanpa koordinat..."):
-            ref = pd.concat([good[["CUSTOMERNO", "ALAMAT", "SALES_DISTRICT", "LATITUDE", "LONGITUDE"]],
+            ref = pd.concat([good[["CUSTOMERNO", "NAMA_OUTLET", "ALAMAT", "SALES_DISTRICT", "LATITUDE", "LONGITUDE"]],
                              db.fetch_district_refs(dists)], ignore_index=True).drop_duplicates("CUSTOMERNO")
             est = opt.estimate_coords(nocoord, ref)
     good_a = pd.concat([good.assign(KETERANGAN=""), est], ignore_index=True)
