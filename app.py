@@ -66,10 +66,24 @@ st.sidebar.header("⚙️ Pengaturan")
 salesman = st.sidebar.text_input("Nama salesman (untuk nama file)")
 quota = st.sidebar.number_input("Kunjungan per hari (Senin–Jumat)", 5, 150, 40, step=1)
 st.sidebar.caption("Sabtu Half Day (50% Cover)")
-mode = st.sidebar.radio("Kalau jumlah kode tidak pas dengan kapasitas",
-                        ["Proporsional", "Batasi kuota"],
-                        help="Proporsional: semua kode masuk, dibagi rata.\n\n"
-                             "Batasi kuota: tiap hari maksimal sesuai kuota, sisanya ditandai BELUM TERJADWAL.")
+mode = st.sidebar.radio("Hari kerja",
+                        ["Proporsional", "Custom Day"],
+                        help="Proporsional: Senin–Sabtu kerja semua, outlet dibagi rata.\n\n"
+                             "Custom Day: pilih sendiri hari kerjanya. Hari yang tidak dicentang = libur, "
+                             "outletnya dibagi ke hari kerja lain (kunjungan per hari jadi lebih banyak).")
+off_days = set()
+if mode == "Custom Day":
+    st.sidebar.caption("Centang hari kerja. Yang **tidak dicentang = hari libur**.")
+    for w in opt.WEEKS:
+        st.sidebar.markdown(f"**Week {w}**")
+        cols = st.sidebar.columns(3)
+        for i, h in enumerate(opt.HARI):
+            if not cols[i % 3].checkbox(h, value=True, key=f"kerja_{w}_{h}"):
+                off_days.add((w, h))
+    if len(off_days) == len(opt.WEEKS) * len(opt.HARI):
+        st.sidebar.error("Minimal harus ada 1 hari kerja.")
+        st.stop()
+q_cfg = (quota, frozenset(off_days))      # kuota + hari libur, dipakai semua perhitungan
 return_to_depot = st.sidebar.checkbox("Hitung perjalanan pulang ke titik awal", value=True)
 with st.sidebar.expander("Pengaturan lanjutan"):
     factor = st.slider("Faktor jalan (× jarak garis lurus)", 1.0, 1.6, 1.3, 0.05)
@@ -116,7 +130,7 @@ if st.button("🚀 Susun Jadwal", type="primary"):
         plan = opt.empty_plan(list(outlets.columns) + ["KETERANGAN"])
     else:
         bar = st.progress(0.0, text="Menyusun jadwal & rute...")
-        plan = opt.build_plan(good_a, quota, mode, factor, return_to_depot, time_limit,
+        plan = opt.build_plan(good_a, q_cfg, mode, factor, return_to_depot, time_limit,
                               progress=lambda p: bar.progress(p, text=f"Menyusun rute... {int(p * 100)}%"))
         bar.empty()
     st.session_state.plans = {"A": plan, "B": None}
@@ -130,7 +144,7 @@ if st.button("🚀 Susun Jadwal", type="primary"):
                 _, gA, rA = pb.apply_road(plan, ors, return_to_depot)
                 st.session_state.road["A"] = (gA, rA)
                 plan_tanpa_perkiraan = plan[plan["KETERANGAN"].fillna("") == ""]
-                dfB, gB, rB = pb.build_plan_b(plan_tanpa_perkiraan, ors, quota, factor, return_to_depot, time_limit,
+                dfB, gB, rB = pb.build_plan_b(plan_tanpa_perkiraan, ors, q_cfg, factor, return_to_depot, time_limit,
                                               step=lambda m, p: bar_b.progress(min(1.0, p), text=m))
                 st.session_state.plans["B"] = dfB
                 st.session_state.road["B"] = (gB, rB)
@@ -172,7 +186,7 @@ def save_plan(df, key=None):
     plans[key] = df
 nc_base = st.session_state.get("nc_base", pd.DataFrame(columns=["CUSTOMERNO", "NAMA_OUTLET", "ALAMAT", "KOORDINAT_GMAPS", "LATITUDE", "LONGITUDE"]))
 st.session_state.setdefault("nc_ver", 0)
-cap = opt.capacity(quota)
+cap = opt.capacity(q_cfg)
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Kode di-paste", meta["n_input"])
 c2.metric("Masuk jadwal", int((plan["WEEK"] != opt.UNSCHEDULED).sum()))
@@ -189,7 +203,7 @@ if n_masalah:
                + "Lengkapi koordinatnya di tab **⚠️ Data Belum Lengkap**.")
 if len(plan) > cap:
     st.warning(f"Jumlah outlet ({len(plan)}) melebihi kapasitas ({cap}). "
-               f"Supaya semua masuk, kuota minimal **{-(-len(plan) // 11)}/hari**.")
+               f"Supaya semua masuk, kuota minimal **{-(-len(plan) * quota // max(cap, 1))}/hari**.")
 if st.session_state.pop("fix_msg", None):
     st.success("✅ Koordinat tersimpan ke database dan outlet sudah dimasukkan ke jadwal (hari terdekat).")
 
@@ -201,7 +215,7 @@ PALETTE = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#00a5a5",
            "#f032e6", "#7a9c00", "#008080", "#9a6324", "#800000", "#000075"]
 
 def draw_map(df, geoms, key, pilih):
-    slots = list(opt.build_slots(quota)["SLOT"])
+    slots = list(opt.build_slots(q_cfg).query("not LIBUR")["SLOT"])
     m = folium.Map(location=opt.DEPOT, zoom_start=12, tiles="OpenStreetMap")
     folium.Marker(opt.DEPOT, tooltip="TITIK AWAL", icon=folium.Icon(color="red", icon="home")).add_to(m)
     for i, s in enumerate(slots):
@@ -233,7 +247,7 @@ def draw_map(df, geoms, key, pilih):
     st_folium(m, height=600, use_container_width=True, returned_objects=[], key=key)
 
 
-SLOT_OPTS = ["Semua"] + list(opt.build_slots(quota)["SLOT"])
+SLOT_OPTS = ["Semua"] + list(opt.build_slots(q_cfg).query("not LIBUR")["SLOT"])
 
 with tab_a:
     pa = st.selectbox("Tampilkan hari", SLOT_OPTS, key="pilih_a")
@@ -304,7 +318,7 @@ with tab_edit:
         st.rerun()
 
 ret_active = road["B"][1] if active == "B" and road.get("B") else None
-ring = opt.summary(plan, quota, factor, return_to_depot, ret_active)
+ring = opt.summary(plan, q_cfg, factor, return_to_depot, ret_active)
 
 with tab_sum:
     if plans["B"] is not None and road["A"] is not None:
@@ -313,7 +327,7 @@ with tab_sum:
         for k, nama in [("A", "Plan A (by gruping)"), ("B", "Plan B (by jalan)")]:
             g, r = road[k]
             dfr = pb.apply_road(plans[k], ors, return_to_depot)[0] if k == "A" else plans[k]
-            sm = opt.summary(dfr, quota, factor, return_to_depot, r)
+            sm = opt.summary(dfr, q_cfg, factor, return_to_depot, r)
             rows.append({"Plan": nama, "Total km jalan (2 minggu)": round(sm["TOTAL_KM"].sum(), 1),
                          "Rata-rata km/hari": round(sm["TOTAL_KM"].sum() / max(1, (sm["JUMLAH_OUTLET"] > 0).sum()), 1)})
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
@@ -405,7 +419,7 @@ with tab_fix:
                 for k in ("A", "B"):
                     if plans[k] is not None:
                         base_k = plans[k][~plans[k]["CUSTOMERNO"].isin(new["CUSTOMERNO"])]   # buang lokasi perkiraan
-                        save_plan(opt.add_outlets(base_k, new.assign(KETERANGAN=""), quota, factor,
+                        save_plan(opt.add_outlets(base_k, new.assign(KETERANGAN=""), q_cfg, factor,
                                                   return_to_depot, time_limit), k)
                 st.session_state.nc_base = cur[~cur["_OK"]].drop(columns="_OK").reset_index(drop=True)
                 st.session_state.nc_ver += 1
@@ -421,7 +435,8 @@ with tab_fix:
 
 with tab_exp:
     info = {"Salesman": salesman, "Metode": "Plan B (by jalan)" if active == "B" else "Plan A (by gruping)",
-            "Kuota/hari": quota, "Kuota Sabtu": quota // 2, "Mode": mode,
+            "Kuota/hari": quota, "Kuota Sabtu": quota // 2, "Hari kerja": mode,
+            "Hari libur": ", ".join(f"{w}-{h}" for w, h in sorted(off_days)) or "-",
             "Faktor jalan": factor, "Pulang ke titik awal": return_to_depot,
             "Titik awal": f"{opt.DEPOT[0]}, {opt.DEPOT[1]}"}
     st.download_button("📥 Download Excel", data=opt.to_excel_bytes(plan, ring, info),

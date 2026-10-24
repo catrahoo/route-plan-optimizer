@@ -32,34 +32,41 @@ def parse_gmaps(text):
 
 
 # ---------- Kapasitas ----------
-def build_slots(quota: int) -> pd.DataFrame:
-    sat = quota // 2
-    rows = [{"WEEK": w, "HARI": h, "CAP": sat if h == "Sabtu" else quota}
+def split_quota(quota):
+    """quota bisa angka (semua hari kerja) atau (angka, set hari libur {(week, hari)})."""
+    if isinstance(quota, tuple):
+        return int(quota[0]), frozenset(quota[1])
+    return int(quota), frozenset()
+
+
+def build_slots(quota) -> pd.DataFrame:
+    q, off = split_quota(quota)
+    sat = q // 2
+    rows = [{"WEEK": w, "HARI": h, "CAP": 0 if (w, h) in off else (sat if h == "Sabtu" else q),
+             "LIBUR": (w, h) in off}
             for w in WEEKS for h in HARI]
     df = pd.DataFrame(rows)
     df["SLOT"] = df["WEEK"] + " - " + df["HARI"]
     return df
 
 
-def capacity(quota: int) -> int:
+def capacity(quota) -> int:
     return int(build_slots(quota)["CAP"].sum())
 
 
 def target_sizes(n: int, caps) -> np.ndarray:
     """Bagi n ke slot sebanding kapasitas (metode sisa terbesar)."""
     caps = np.asarray(caps, dtype=float)
-    raw = n * caps / caps.sum()
+    raw = n * caps / max(caps.sum(), 1)
     base = np.floor(raw).astype(int)
     rem = n - base.sum()
     base[np.argsort(-(raw - base))[:rem]] += 1
     return base
 
 
-def slot_sizes(n: int, caps, mode: str) -> np.ndarray:
-    caps = np.asarray(caps, dtype=int)
-    if mode == "Batasi kuota" and n >= caps.sum():
-        return caps.copy()
-    return target_sizes(n, caps)
+def slot_sizes(n: int, caps, mode: str = None) -> np.ndarray:
+    """Semua outlet dibagi ke hari kerja sebanding kuota (hari libur = 0)."""
+    return target_sizes(n, np.asarray(caps, dtype=int))
 
 
 # ---------- Geometri ----------
@@ -275,6 +282,8 @@ def add_outlets(plan: pd.DataFrame, new: pd.DataFrame, quota: int, factor: float
     for _, r in new.iterrows():
         best, best_d, best_full = None, None, None
         for s in slots.itertuples():
+            if s.LIBUR:
+                continue
             key = (s.WEEK, s.HARI)
             if key in centers.index:
                 c = centers.loc[key]
@@ -323,7 +332,7 @@ def compute_distances(df: pd.DataFrame, factor: float) -> pd.DataFrame:
     return df
 
 
-def summary(df: pd.DataFrame, quota: int, factor: float, return_to_depot: bool,
+def summary(df: pd.DataFrame, quota, factor: float, return_to_depot: bool,
             return_km: dict = None) -> pd.DataFrame:
     rows = []
     for s in build_slots(quota).itertuples():
@@ -334,7 +343,8 @@ def summary(df: pd.DataFrame, quota: int, factor: float, return_to_depot: bool,
         elif return_to_depot and len(sub):
             last = sub.iloc[-1]
             km += haversine_matrix([last.LATITUDE, DEPOT[0]], [last.LONGITUDE, DEPOT[1]])[0, 1] * factor
-        rows.append({"WEEK": s.WEEK, "HARI": s.HARI, "KUOTA": s.CAP, "JUMLAH_OUTLET": len(sub),
+        rows.append({"WEEK": s.WEEK, "HARI": s.HARI, "STATUS": "LIBUR" if s.LIBUR else "Kerja",
+                     "KUOTA": s.CAP, "JUMLAH_OUTLET": len(sub),
                      "SELISIH": len(sub) - s.CAP, "TOTAL_KM": round(km, 1)})
     return pd.DataFrame(rows)
 
