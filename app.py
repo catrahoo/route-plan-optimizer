@@ -12,6 +12,9 @@ import optimizer as opt
 import plan_b as pb
 from roads import ORS, RoadError
 
+import monitor
+monitor.pasang("Route Plan Optimizer")  # notif WA kalau app error
+
 st.set_page_config(page_title="Route Plan Optimizer", page_icon="📍", layout="wide")
 theme.inject()
 
