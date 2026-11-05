@@ -65,6 +65,11 @@ def fetch_outlets(codes: tuple) -> pd.DataFrame:
                 saran = "Fungsi `get_outlets` belum ada. Jalankan ulang file SQL di Supabase > SQL Editor."
             elif "api key" in pesan.lower() or kode in ("401", "PGRST301"):
                 saran = "API key tidak valid. Cek lagi isi `key` di Secrets Streamlit (jangan ada spasi/tanda kutip ganda)."
+            elif "name or service not known" in pesan.lower() or "errno -2" in pesan.lower() \
+                    or "nodename nor servname" in pesan.lower() or "getaddrinfo" in pesan.lower():
+                saran = ("Database Supabase sedang **tertidur (paused)** karena lama tidak dipakai. "
+                         "Buka supabase.com → project **Ruteplan Optimizer** → klik **Restore project**, "
+                         "tunggu 2–5 menit, lalu coba lagi.")
             else:
                 saran = "Kirim pesan error ini ke pembuat aplikasi."
             st.error(f"❌ Gagal mengambil data dari Supabase.\n\n**Kode:** {kode}  \n**Pesan:** {pesan}\n\n💡 {saran}")
