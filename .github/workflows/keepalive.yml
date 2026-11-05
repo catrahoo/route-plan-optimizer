@@ -1,0 +1,18 @@
+name: supabase-keepalive
+# Ping ringan ke Supabase tiap 3 hari supaya project gratis tidak di-pause (batas 7 hari tidak aktif).
+on:
+  schedule:
+    - cron: "17 1 */3 * *"
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query ringan ke Supabase
+        env:
+          URL: ${{ secrets.SUPABASE_URL }}
+          KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          if [ -z "$URL" ] || [ -z "$KEY" ]; then echo "Secrets SUPABASE_URL / SUPABASE_KEY belum diisi"; exit 1; fi
+          curl -sf "${URL%/}/rest/v1/outlet_master?select=customerno&limit=1" \
+            -H "apikey: $KEY" -H "Authorization: Bearer $KEY" > /dev/null && echo "OK"
