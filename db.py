@@ -2,6 +2,30 @@ import pandas as pd
 import streamlit as st
 from supabase import create_client
 
+def _neon_url():
+    """URL Postgres Neon dari Secrets ([neon] url = "postgresql://..."), atau None kalau tidak ada."""
+    sec = st.secrets.get("neon", {})
+    url = sec.get("url") if hasattr(sec, "get") else None
+    return str(url).strip().strip('"') if url else None
+
+
+@st.cache_resource
+def _neon_pool(url: str):
+    from psycopg_pool import ConnectionPool
+    return ConnectionPool(url, min_size=0, max_size=4, kwargs={"autocommit": True}, open=True)
+
+
+def _neon_query(sql: str, params=None, fetch=True):
+    try:
+        with _neon_pool(_neon_url()).connection() as conn:
+            cur = conn.execute(sql, params)
+            return cur.fetchall() if fetch else None
+    except Exception as e:
+        st.error(f"❌ Gagal mengambil data dari database Neon.\n\n**Pesan:** {e}\n\n"
+                 "💡 Cek isi `[neon] url` di Secrets Streamlit, atau kirim pesan error ini ke pembuat aplikasi.")
+        st.stop()
+
+
 COLS = ["customerno", "nama_outlet", "salesman", "alamat", "sales_office",
         "sales_group", "sales_district", "latitude", "longitude"]
 
@@ -45,7 +69,10 @@ def get_client():
 
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_outlets(codes: tuple) -> pd.DataFrame:
-    """Ambil data outlet dari Supabase berdasarkan daftar CUSTOMERNO."""
+    """Ambil data outlet berdasarkan daftar CUSTOMERNO (Neon kalau ada, kalau tidak Supabase)."""
+    if _neon_url():
+        rows = _neon_query(f"select {', '.join(COLS)} from outlet_master where customerno = any(%s)", (list(codes),))
+        return pd.DataFrame(rows, columns=COLS).rename(columns=str.upper)
     sb, rows, codes = get_client(), [], list(codes)
     for i in range(0, len(codes), 500):
         try:
@@ -80,6 +107,11 @@ def fetch_outlets(codes: tuple) -> pd.DataFrame:
 
 def update_coords(customerno: str, lat: float, lon: float):
     """Simpan koordinat hasil edit manual ke database."""
+    if _neon_url():
+        _neon_query("update outlet_master set latitude = %s, longitude = %s, updated_at = now() "
+                    "where customerno = %s", (float(lat), float(lon), customerno), fetch=False)
+        fetch_outlets.clear()
+        return
     get_client().table("outlet_master").update(
         {"latitude": float(lat), "longitude": float(lon)}).eq("customerno", customerno).execute()
     fetch_outlets.clear()
@@ -88,6 +120,11 @@ def update_coords(customerno: str, lat: float, lon: float):
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_district_refs(districts: tuple) -> pd.DataFrame:
     """Outlet berkoordinat di Sales District tertentu (acuan perkiraan lokasi outlet tanpa koordinat)."""
+    cols = ["customerno", "nama_outlet", "alamat", "sales_district", "latitude", "longitude"]
+    if _neon_url():
+        rows = _neon_query(f"select {', '.join(cols)} from outlet_master "
+                           "where sales_district = any(%s) and latitude is not null", (list(districts),))
+        return pd.DataFrame(rows, columns=cols).rename(columns=str.upper)
     sb, rows = get_client(), []
     for dist in districts:
         start = 0
